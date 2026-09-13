@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Python 網頁執行器 (完整修正版)</title>
+    <!-- 引入 Pyodide -->
+    <script src="https://cdn.jsdelivr.net/pyodide/v0.25.0/full/pyodide.js"></script>
+    <style>
+        body { 
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+            max-width: 800px; 
+            margin: 20px auto; 
+            padding: 0 20px; 
+            background-color: #f9f9f9;
+        }
+        h1 { color: #333; }
+        .controls { 
+            background: #ffffff; 
+            padding: 20px; 
+            border-radius: 8px; 
+            margin-bottom: 20px; 
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1); 
+        }
+        #output { 
+            background-color: #1e1e1e; 
+            color: #00ff00; 
+            padding: 15px; 
+            border-radius: 8px; 
+            min-height: 350px; 
+            white-space: pre-wrap; 
+            font-family: 'Courier New', Courier, monospace; 
+            overflow-x: auto; 
+            box-shadow: inset 0 0 10px rgba(0,0,0,0.5); 
+            line-height: 1.5;
+        }
+        .error { color: #ff5555; }
+        input[type="file"] {
+            font-size: 16px;
+            margin: 10px 0;
+            display: block;
+        }
+        button { 
+            background-color: #007bff; 
+            color: white; 
+            border: none; 
+            padding: 10px 20px; 
+            border-radius: 5px; 
+            cursor: pointer; 
+            font-size: 16px; 
+            font-weight: bold;
+            transition: background 0.3s;
+        }
+        button:disabled { background-color: #cccccc; cursor: not-allowed; }
+        button:hover:not(:disabled) { background-color: #0056b3; }
+        #status { font-weight: bold; color: #d9534f; margin-bottom: 10px; display: block; font-size: 18px;}
+    </style>
+</head>
+<body>
+
+    <h1>🐍 Python 網頁執行器</h1>
+    
+    <div class="controls">
+        <span id="status">⏳ 正在下載並初始化 Python 虛擬環境 (約需幾秒鐘)...</span>
+        <input type="file" id="fileInput" accept=".py">
+        <button id="runBtn" disabled onclick="runCode()">▶ 執行程式</button>
+    </div>
+
+    <h3>終端機輸出：</h3>
+    <pre id="output"></pre>
+
+    <script>
+        let pyodide;
+        const outputDiv = document.getElementById("output");
+        const statusSpan = document.getElementById("status");
+        const runBtn = document.getElementById("runBtn");
+
+        // 輔助函數：將文字印到畫面
+        function printToConsole(text, isError = false) {
+            if (isError) {
+                outputDiv.innerHTML += `<span class="error">${text}</span>\n`;
+            } else {
+                outputDiv.textContent += text + "\n";
+            }
+        }
+
+        async function initPyodide() {
+            try {
+                pyodide = await loadPyodide();
+                
+                // 設定標準輸出與錯誤
+                pyodide.setStdout({ batched: (text) => printToConsole(text) });
+                pyodide.setStderr({ batched: (text) => printToConsole(text, true) });
+
+                statusSpan.textContent = "✅ Python 環境已準備就緒！";
+                statusSpan.style.color = "#28a745";
+                runBtn.disabled = false;
+            } catch (err) {
+                statusSpan.textContent = "❌ 載入失敗，請檢查網路。";
+                console.error(err);
+            }
+        }
+        
+        initPyodide();
+
+        async function runCode() {
+            const fileInput = document.getElementById('fileInput');
+            
+            if (!fileInput.files.length) {
+                alert('請先選擇一個 .py 檔案！');
+                return;
+            }
+
+            const file = fileInput.files[0];
+            const reader = new FileReader();
+
+            // 執行前清空輸出並鎖定按鈕
+            outputDiv.textContent = ""; 
+            runBtn.disabled = true;
+            statusSpan.textContent = "⚙️ 程式執行中...";
+            statusSpan.style.color = "#007bff";
+
+            reader.onload = async function(e) {
+                const userCode = e.target.result;
+                
+                // 每次執行前，強制在使用者的程式碼最上方注入 I/O 攔截器
+                const pythonCode = `
+import builtins
+import sys
+from js import prompt
+
+def custom_input(prompt_text=""):
+    res = prompt(prompt_text)
+    if res is None:
+        raise EOFError("使用者取消了輸入 (EOF)")
+    print(f"{prompt_text}{res}")
+    return res
+
+class WebStdin:
+    def read(self, size=-1):
+        res = prompt("【系統攔截：多行輸入模式】\\n您的程式正在請求貼上多行內容。\\n請在此貼上內容，按下確定後系統會自動模擬 [Ctrl + D] 送出：")
+        if res is None:
+            return ""
+        print(res)
+        return res + "\\n"
+        
+    def readline(self, size=-1):
+        res = prompt("程式請求輸入一列：")
+        if res is None:
+            return ""
+        print(res)
+        return res + "\\n"
+
+builtins.input = custom_input
+sys.stdin = WebStdin()
+
+# ==================== 下方為您的原始程式碼 ====================
+` + userCode;
+
+                try {
+                    await pyodide.runPythonAsync(pythonCode);
+                    statusSpan.textContent = "✅ 執行完畢！";
+                    statusSpan.style.color = "#28a745";
+                } catch (err) {
+                    printToConsole("\n[程式錯誤]:\n" + err, true);
+                    statusSpan.textContent = "⚠️ 執行發生錯誤！";
+                    statusSpan.style.color = "#d9534f";
+                } finally {
+                    runBtn.disabled = false;
+                }
+            };
+
+            reader.readAsText(file);
+        }
+    </script>
+</body>
+</html>

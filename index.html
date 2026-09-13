@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Python 網頁執行器 (支援 Input)</title>
+    <script src="https://cdn.jsdelivr.net/pyodide/v0.25.0/full/pyodide.js"></script>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; max-width: 800px; margin: 20px auto; padding: 0 20px; }
+        .controls { background: #f0f4f8; padding: 15px; border-radius: 8px; margin-bottom: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        #output { background-color: #1e1e1e; color: #00ff00; padding: 15px; border-radius: 8px; min-height: 300px; white-space: pre-wrap; font-family: 'Courier New', Courier, monospace; overflow-x: auto; box-shadow: inset 0 0 10px rgba(0,0,0,0.5); }
+        .error { color: #ff5555; }
+        button { background-color: #007bff; color: white; border: none; padding: 8px 15px; border-radius: 4px; cursor: pointer; font-size: 16px; margin-top: 10px; }
+        button:disabled { background-color: #cccccc; cursor: not-allowed; }
+        button:hover:not(:disabled) { background-color: #0056b3; }
+        #status { font-weight: bold; color: #d9534f; margin-bottom: 10px; display: block; }
+    </style>
+</head>
+<body>
+
+    <h1>Python 網頁執行器</h1>
+    
+    <div class="controls">
+        <span id="status">⏳ 正在下載並初始化 Python 虛擬環境 (約需幾秒鐘)...</span>
+        <input type="file" id="fileInput" accept=".py">
+        <br>
+        <button id="runBtn" disabled onclick="runCode()">▶ 執行程式</button>
+    </div>
+
+    <h3>終端機輸出：</h3>
+    <pre id="output"></pre>
+
+    <script>
+        let pyodide;
+        const outputDiv = document.getElementById("output");
+        const statusSpan = document.getElementById("status");
+        const runBtn = document.getElementById("runBtn");
+
+        // 輔助函數：將文字印到畫面
+        function printToConsole(text, isError = false) {
+            if (isError) {
+                outputDiv.innerHTML += `<span class="error">${text}</span>\n`;
+            } else {
+                outputDiv.textContent += text + "\n";
+            }
+        }
+
+        async function initPyodide() {
+            try {
+                pyodide = await loadPyodide();
+                
+                // 1. 設定標準輸出與錯誤
+                pyodide.setStdout({ batched: (text) => printToConsole(text) });
+                pyodide.setStderr({ batched: (text) => printToConsole(text, true) });
+
+                // 2. 注入 Python 程式碼，覆寫內建的 input() 函數
+                await pyodide.runPythonAsync(`
+import builtins
+from js import prompt
+
+def custom_input(prompt_text=""):
+    # 呼叫瀏覽器的 prompt 視窗
+    res = prompt(prompt_text)
+    if res is None:
+        raise KeyboardInterrupt("使用者取消了輸入 (EOF)")
+    
+    # 將使用者的輸入也印在畫面上，模擬真實終端機體驗
+    print(f"{prompt_text}{res}")
+    return res
+
+builtins.input = custom_input
+                `);
+
+                statusSpan.textContent = "✅ Python 環境已準備就緒！";
+                statusSpan.style.color = "#28a745";
+                runBtn.disabled = false;
+            } catch (err) {
+                statusSpan.textContent = "❌ 載入失敗，請檢查網路。";
+                console.error(err);
+            }
+        }
+        
+        initPyodide();
+
+        async function runCode() {
+            const fileInput = document.getElementById('fileInput');
+            
+            if (!fileInput.files.length) {
+                alert('請先選擇一個 .py 檔案！');
+                return;
+            }
+
+            const file = fileInput.files[0];
+            const reader = new FileReader();
+
+            outputDiv.textContent = ""; 
+            runBtn.disabled = true;
+            statusSpan.textContent = "⚙️ 程式執行中...";
+            statusSpan.style.color = "#007bff";
+
+            reader.onload = async function(e) {
+                const pythonCode = e.target.result;
+                try {
+                    await pyodide.runPythonAsync(pythonCode);
+                    statusSpan.textContent = "✅ 執行完畢！";
+                    statusSpan.style.color = "#28a745";
+                } catch (err) {
+                    printToConsole("[程式錯誤]:\n" + err, true);
+                    statusSpan.textContent = "⚠️ 執行發生錯誤！";
+                    statusSpan.style.color = "#d9534f";
+                } finally {
+                    runBtn.disabled = false;
+                }
+            };
+
+            reader.readAsText(file);
+        }
+    </script>
+</body>
+</html>
